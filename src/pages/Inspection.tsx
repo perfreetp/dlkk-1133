@@ -75,7 +75,7 @@ export default function Inspection() {
 
   const handleCreate = () => {
     if (!newOrder.vehicleId || !newOrder.description) return;
-    addInspectionOrder({
+    const newId = addInspectionOrder({
       vehicleId: newOrder.vehicleId,
       category: newOrder.category,
       status: 'pending',
@@ -83,6 +83,8 @@ export default function Inspection() {
       description: newOrder.description,
       createdAt: new Date().toLocaleString(),
     });
+    setActiveTab('all');
+    setSelectedOrderId(newId);
     setShowCreateModal(false);
     setNewOrder({ vehicleId: '', category: 'other', description: '', photos: [] });
     showToast('工单已创建');

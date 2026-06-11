@@ -46,7 +46,12 @@ export default function Pricing() {
   const updatePricingRule = useAppStore((s) => s.updatePricingRule);
   const deletePricingRule = useAppStore((s) => s.deletePricingRule);
 
+  const [calcMode, setCalcMode] = useState<'single' | 'combo'>('single');
   const [calcRuleId, setCalcRuleId] = useState<string>('');
+  const [baseRuleId, setBaseRuleId] = useState<string>('');
+  const [timeRuleId, setTimeRuleId] = useState<string>('');
+  const [areaRuleId, setAreaRuleId] = useState<string>('');
+  const [promoRuleId, setPromoRuleId] = useState<string>('');
   const [calcMinutes, setCalcMinutes] = useState(30);
   const [calcKm, setCalcKm] = useState(5);
 
@@ -61,6 +66,46 @@ export default function Pricing() {
       setCalcRuleId(rules[0].id);
     }
   }, [rules, calcRuleId]);
+
+  useEffect(() => {
+    const baseRules = rules.filter((r) => r.type === 'base');
+    if (!baseRuleId && baseRules.length > 0) {
+      setBaseRuleId(baseRules[0].id);
+    }
+    if (baseRuleId && !baseRules.find((r) => r.id === baseRuleId)) {
+      setBaseRuleId(baseRules.length > 0 ? baseRules[0].id : '');
+    }
+  }, [rules, baseRuleId]);
+
+  useEffect(() => {
+    const timeRules = rules.filter((r) => r.type === 'time');
+    if (!timeRuleId && timeRules.length > 0) {
+      setTimeRuleId(timeRules[0].id);
+    }
+    if (timeRuleId && !timeRules.find((r) => r.id === timeRuleId)) {
+      setTimeRuleId(timeRules.length > 0 ? timeRules[0].id : '');
+    }
+  }, [rules, timeRuleId]);
+
+  useEffect(() => {
+    const areaRules = rules.filter((r) => r.type === 'area');
+    if (!areaRuleId && areaRules.length > 0) {
+      setAreaRuleId(areaRules[0].id);
+    }
+    if (areaRuleId && !areaRules.find((r) => r.id === areaRuleId)) {
+      setAreaRuleId(areaRules.length > 0 ? areaRules[0].id : '');
+    }
+  }, [rules, areaRuleId]);
+
+  useEffect(() => {
+    const promoRules = rules.filter((r) => r.type === 'promotion');
+    if (!promoRuleId && promoRules.length > 0) {
+      setPromoRuleId(promoRules[0].id);
+    }
+    if (promoRuleId && !promoRules.find((r) => r.id === promoRuleId)) {
+      setPromoRuleId(promoRules.length > 0 ? promoRules[0].id : '');
+    }
+  }, [rules, promoRuleId]);
 
   useEffect(() => {
     if (!toast) return;
@@ -149,6 +194,22 @@ export default function Pricing() {
       const remaining = rules.filter((r) => r.id !== id);
       setCalcRuleId(remaining.length > 0 ? remaining[0].id : '');
     }
+    if (baseRuleId === id) {
+      const remaining = rules.filter((r) => r.type === 'base' && r.id !== id);
+      setBaseRuleId(remaining.length > 0 ? remaining[0].id : '');
+    }
+    if (timeRuleId === id) {
+      const remaining = rules.filter((r) => r.type === 'time' && r.id !== id);
+      setTimeRuleId(remaining.length > 0 ? remaining[0].id : '');
+    }
+    if (areaRuleId === id) {
+      const remaining = rules.filter((r) => r.type === 'area' && r.id !== id);
+      setAreaRuleId(remaining.length > 0 ? remaining[0].id : '');
+    }
+    if (promoRuleId === id) {
+      const remaining = rules.filter((r) => r.type === 'promotion' && r.id !== id);
+      setPromoRuleId(remaining.length > 0 ? remaining[0].id : '');
+    }
     showToast('规则已删除');
   };
 
@@ -172,6 +233,54 @@ export default function Pricing() {
     let total = base + calcMinutes * perMin + calcKm * perKm;
     if (currentRule.discount) total = total * (1 - currentRule.discount / 100);
     return total.toFixed(2);
+  };
+
+  const baseRule = rules.find((r) => r.id === baseRuleId);
+  const timeRule = rules.find((r) => r.id === timeRuleId);
+  const areaRule = rules.find((r) => r.id === areaRuleId);
+  const promoRule = rules.find((r) => r.id === promoRuleId);
+
+  const calculateCombo = () => {
+    if (!baseRule) return null;
+
+    const basePrice = baseRule.basePrice || 0;
+
+    const basePerMinute = baseRule.perMinute || 0;
+    const timePerMinute = timeRule?.perMinute || 0;
+    const effectivePerMinute = Math.max(basePerMinute, timePerMinute);
+    const perMinuteRule = timePerMinute >= basePerMinute && timeRule ? timeRule : baseRule;
+
+    const basePerKm = baseRule.perKm || 0;
+    const areaPerKm = areaRule?.perKm || 0;
+    const effectivePerKm = Math.max(basePerKm, areaPerKm);
+    const perKmRule = areaPerKm >= basePerKm && areaRule ? areaRule : baseRule;
+
+    const minuteCost = calcMinutes * effectivePerMinute;
+    const kmCost = calcKm * effectivePerKm;
+    const subtotal = basePrice + minuteCost + kmCost;
+
+    let discountAmount = 0;
+    let finalTotal = subtotal;
+    if (promoRule && promoRule.discount !== undefined) {
+      discountAmount = subtotal * (promoRule.discount / 100);
+      finalTotal = subtotal - discountAmount;
+    }
+
+    return {
+      basePrice,
+      baseRuleName: baseRule.name,
+      effectivePerMinute,
+      perMinuteRuleName: perMinuteRule.name,
+      minuteCost,
+      effectivePerKm,
+      perKmRuleName: perKmRule.name,
+      kmCost,
+      subtotal,
+      discount: promoRule?.discount,
+      discountAmount,
+      promoRuleName: promoRule?.name,
+      finalTotal,
+    };
   };
 
   const renderFormField = (label: string, field: keyof FormState, type: string = 'text', placeholder: string = '') => (
@@ -264,6 +373,8 @@ export default function Pricing() {
       </div>
     );
   };
+
+  const comboResult = calculateCombo();
 
   return (
     <div className="space-y-6">
@@ -413,7 +524,7 @@ export default function Pricing() {
           })}
         </div>
 
-        <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 h-fit sticky top-0">
+        <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 h-fit sticky top-0 lg:col-span-1">
           <div className="flex items-center gap-2 mb-5">
             <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-cyan-400 rounded-xl flex items-center justify-center">
               <Calculator className="w-5 h-5 text-white" />
@@ -424,21 +535,135 @@ export default function Pricing() {
             </div>
           </div>
 
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">选择规则</label>
-              <select
-                value={calcRuleId}
-                onChange={(e) => setCalcRuleId(e.target.value)}
-                className="w-full px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+          <div className="mb-5">
+            <div className="bg-slate-100 rounded-lg p-1 flex">
+              <button
+                onClick={() => setCalcMode('single')}
+                className={clsx(
+                  'flex-1 py-2 text-sm font-medium rounded-md transition-all',
+                  calcMode === 'single'
+                    ? 'bg-white text-blue-600 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                )}
               >
-                {rules.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
+                单规则试算
+              </button>
+              <button
+                onClick={() => setCalcMode('combo')}
+                className={clsx(
+                  'flex-1 py-2 text-sm font-medium rounded-md transition-all',
+                  calcMode === 'combo'
+                    ? 'bg-white text-blue-600 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                )}
+              >
+                组合试算
+              </button>
             </div>
+          </div>
+
+          <div className="space-y-4">
+            {calcMode === 'single' ? (
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">选择规则</label>
+                <select
+                  value={calcRuleId}
+                  onChange={(e) => setCalcRuleId(e.target.value)}
+                  className="w-full px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+                >
+                  {rules.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                    <span className="inline-flex items-center gap-1">
+                      <BadgeDollarSign className="w-3.5 h-3.5 text-blue-600" />
+                      基础定价
+                    </span>
+                  </label>
+                  <select
+                    value={baseRuleId}
+                    onChange={(e) => setBaseRuleId(e.target.value)}
+                    className="w-full px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+                  >
+                    {groupedRules.base.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                    <span className="inline-flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5 text-purple-600" />
+                      时段定价
+                    </span>
+                  </label>
+                  <select
+                    value={timeRuleId}
+                    onChange={(e) => setTimeRuleId(e.target.value)}
+                    className="w-full px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+                  >
+                    <option value="">不使用</option>
+                    {groupedRules.time.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                    <span className="inline-flex items-center gap-1">
+                      <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                      区域定价
+                    </span>
+                  </label>
+                  <select
+                    value={areaRuleId}
+                    onChange={(e) => setAreaRuleId(e.target.value)}
+                    className="w-full px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+                  >
+                    <option value="">不使用</option>
+                    {groupedRules.area.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                    <span className="inline-flex items-center gap-1">
+                      <Tag className="w-3.5 h-3.5 text-orange-600" />
+                      优惠活动
+                    </span>
+                  </label>
+                  <select
+                    value={promoRuleId}
+                    onChange={(e) => setPromoRuleId(e.target.value)}
+                    className="w-full px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+                  >
+                    <option value="">不使用</option>
+                    {groupedRules.promotion.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
 
             <div>
               <div className="flex justify-between text-sm mb-1.5">
@@ -471,38 +696,86 @@ export default function Pricing() {
               />
             </div>
 
-            <div className="pt-4 border-t border-slate-100">
-              <div className="bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl p-5 text-white text-center shadow-lg shadow-blue-500/30">
-                <p className="text-sm text-blue-100">预估费用</p>
-                <p className="text-4xl font-bold mt-1">¥{calculatePrice()}</p>
-              </div>
-            </div>
+            {calcMode === 'single' ? (
+              <>
+                <div className="pt-4 border-t border-slate-100">
+                  <div className="bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl p-5 text-white text-center shadow-lg shadow-blue-500/30">
+                    <p className="text-sm text-blue-100">预估费用</p>
+                    <p className="text-4xl font-bold mt-1">¥{calculatePrice()}</p>
+                  </div>
+                </div>
 
-            {currentRule && (
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between text-slate-500">
-                  <span>起步价</span>
-                  <span className="text-slate-700 font-medium">¥{currentRule.basePrice || 0}</span>
-                </div>
-                <div className="flex justify-between text-slate-500">
-                  <span>时长费 ({calcMinutes}分钟)</span>
-                  <span className="text-slate-700 font-medium">
-                    ¥{(calcMinutes * (currentRule.perMinute || 0)).toFixed(2)}
-                  </span>
-                </div>
-                <div className="flex justify-between text-slate-500">
-                  <span>里程费 ({calcKm}km)</span>
-                  <span className="text-slate-700 font-medium">
-                    ¥{(calcKm * (currentRule.perKm || 0)).toFixed(2)}
-                  </span>
-                </div>
-                {currentRule.discount !== undefined && currentRule.discount > 0 && (
-                  <div className="flex justify-between text-orange-500">
-                    <span>优惠折扣</span>
-                    <span className="font-medium">-{currentRule.discount}%</span>
+                {currentRule && (
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between text-slate-500">
+                      <span>起步价</span>
+                      <span className="text-slate-700 font-medium">¥{currentRule.basePrice || 0}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>时长费 ({calcMinutes}分钟)</span>
+                      <span className="text-slate-700 font-medium">
+                        ¥{(calcMinutes * (currentRule.perMinute || 0)).toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>里程费 ({calcKm}km)</span>
+                      <span className="text-slate-700 font-medium">
+                        ¥{(calcKm * (currentRule.perKm || 0)).toFixed(2)}
+                      </span>
+                    </div>
+                    {currentRule.discount !== undefined && currentRule.discount > 0 && (
+                      <div className="flex justify-between text-orange-500">
+                        <span>优惠折扣</span>
+                        <span className="font-medium">-{currentRule.discount}%</span>
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
+              </>
+            ) : (
+              <>
+                {comboResult ? (
+                  <>
+                    <div className="pt-4 border-t border-slate-100">
+                      <div className="bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl p-5 text-white text-center shadow-lg shadow-blue-500/30">
+                        <p className="text-sm text-blue-100">应付金额</p>
+                        <p className="text-4xl font-bold mt-1">¥{comboResult.finalTotal.toFixed(2)}</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2.5 text-sm">
+                      <div className="flex justify-between text-slate-500">
+                        <span>起步价 ({comboResult.baseRuleName})</span>
+                        <span className="text-slate-700 font-medium">¥{comboResult.basePrice.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-500">
+                        <span>时长费 ({comboResult.perMinuteRuleName}, ¥{comboResult.effectivePerMinute}/min × {calcMinutes})</span>
+                        <span className="text-slate-700 font-medium">¥{comboResult.minuteCost.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-500">
+                        <span>里程费 ({comboResult.perKmRuleName}, ¥{comboResult.effectivePerKm}/km × {calcKm})</span>
+                        <span className="text-slate-700 font-medium">¥{comboResult.kmCost.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600 pt-1 border-t border-slate-100">
+                        <span className="font-medium">小计</span>
+                        <span className="font-semibold">¥{comboResult.subtotal.toFixed(2)}</span>
+                      </div>
+                      {comboResult.discount !== undefined && comboResult.discount > 0 && (
+                        <div className="flex justify-between text-orange-500">
+                          <span>优惠折扣 ({comboResult.promoRuleName}, -{comboResult.discount}%)</span>
+                          <span className="font-medium">-¥{comboResult.discountAmount.toFixed(2)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="pt-4 border-t border-slate-100">
+                    <div className="bg-slate-100 rounded-xl p-5 text-center">
+                      <p className="text-sm text-slate-500">请先创建基础定价规则</p>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>

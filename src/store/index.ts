@@ -1,12 +1,6 @@
 import { create } from 'zustand';
-import type {
-  Vehicle, Station, DispatchTask, InspectionOrder,
-  Complaint, PricingRule
-} from '@/types';
-import {
-  mockVehicles, mockStations, mockDispatchTasks, mockInspectionOrders,
-  mockComplaints, mockPricingRules
-} from '@/data/mockData';
+import type { Vehicle, Station, DispatchTask, InspectionOrder, Complaint, PricingRule } from '@/types';
+import { mockVehicles, mockStations, mockDispatchTasks, mockInspectionOrders, mockComplaints, mockPricingRules } from '@/data/mockData';
 
 interface AppState {
   vehicles: Vehicle[];
@@ -23,9 +17,11 @@ interface AppState {
   addStation: (station: Omit<Station, 'id'>) => void;
   updateStation: (id: string, updates: Partial<Station>) => void;
   deleteStation: (id: string) => void;
+  addDispatchTask: (task: Omit<DispatchTask, 'id'>) => string;
   updateDispatchTask: (id: string, updates: Partial<DispatchTask>) => void;
+  executeDispatchTask: (id: string) => void;
+  addInspectionOrder: (order: Omit<InspectionOrder, 'id'>) => string;
   updateInspectionOrder: (id: string, updates: Partial<InspectionOrder>) => void;
-  addInspectionOrder: (order: Omit<InspectionOrder, 'id'>) => void;
   updateComplaint: (id: string, updates: Partial<Complaint>) => void;
   addPricingRule: (rule: Omit<PricingRule, 'id'>) => void;
   updatePricingRule: (id: string, updates: Partial<PricingRule>) => void;
@@ -44,15 +40,15 @@ export const useAppStore = create<AppState>((set) => ({
   setSelectedVehicleId: (id) => set({ selectedVehicleId: id }),
 
   updateVehicleStatus: (id, status) => set((state) => ({
-    vehicles: state.vehicles.map((v) => v.id === id ? { ...v, status } : v),
+    vehicles: state.vehicles.map((v) => (v.id === id ? { ...v, status } : v)),
   })),
 
   lockVehicle: (id) => set((state) => ({
-    vehicles: state.vehicles.map((v) => v.id === id ? { ...v, status: 'locked' } : v),
+    vehicles: state.vehicles.map((v) => (v.id === id ? { ...v, status: 'locked' } : v)),
   })),
 
   unlockVehicle: (id) => set((state) => ({
-    vehicles: state.vehicles.map((v) => v.id === id ? { ...v, status: 'online' } : v),
+    vehicles: state.vehicles.map((v) => (v.id === id ? { ...v, status: 'online' } : v)),
   })),
 
   addStation: (station) => set((state) => ({
@@ -60,27 +56,63 @@ export const useAppStore = create<AppState>((set) => ({
   })),
 
   updateStation: (id, updates) => set((state) => ({
-    stations: state.stations.map((s) => s.id === id ? { ...s, ...updates } : s),
+    stations: state.stations.map((s) => (s.id === id ? { ...s, ...updates } : s)),
   })),
 
   deleteStation: (id) => set((state) => ({
     stations: state.stations.filter((s) => s.id !== id),
   })),
 
+  addDispatchTask: (task) => {
+    const id = `d${Date.now()}`;
+    set((state) => ({
+      dispatchTasks: [{ ...task, id }, ...state.dispatchTasks],
+    }));
+    return id;
+  },
+
   updateDispatchTask: (id, updates) => set((state) => ({
-    dispatchTasks: state.dispatchTasks.map((t) => t.id === id ? { ...t, ...updates } : t),
+    dispatchTasks: state.dispatchTasks.map((t) => (t.id === id ? { ...t, ...updates } : t)),
   })),
+
+  executeDispatchTask: (id) => set((state) => {
+    const task = state.dispatchTasks.find((t) => t.id === id);
+    if (!task) return state;
+    let newStations = state.stations;
+    const count = task.vehicleCount || 0;
+    if (task.type === 'overflow' && task.fromStationId && task.toStationId && count > 0) {
+      newStations = state.stations.map((s) => {
+        if (s.id === task.fromStationId) return { ...s, currentCount: Math.max(0, s.currentCount - count) };
+        if (s.id === task.toStationId) return { ...s, currentCount: Math.min(s.capacity, s.currentCount + count) };
+        return s;
+      });
+    } else if (task.type === 'shortage' && task.toStationId && count > 0) {
+      newStations = state.stations.map((s) =>
+        s.id === task.toStationId ? { ...s, currentCount: Math.min(s.capacity, s.currentCount + count) } : s
+      );
+    }
+    return {
+      stations: newStations,
+      dispatchTasks: state.dispatchTasks.map((t) =>
+        t.id === id ? { ...t, status: 'completed' as const } : t
+      ),
+    };
+  }),
+
+  addInspectionOrder: (order) => {
+    const id = `i${Date.now()}`;
+    set((state) => ({
+      inspectionOrders: [{ ...order, id }, ...state.inspectionOrders],
+    }));
+    return id;
+  },
 
   updateInspectionOrder: (id, updates) => set((state) => ({
-    inspectionOrders: state.inspectionOrders.map((o) => o.id === id ? { ...o, ...updates } : o),
-  })),
-
-  addInspectionOrder: (order) => set((state) => ({
-    inspectionOrders: [{ ...order, id: `i${Date.now()}` }, ...state.inspectionOrders],
+    inspectionOrders: state.inspectionOrders.map((o) => (o.id === id ? { ...o, ...updates } : o)),
   })),
 
   updateComplaint: (id, updates) => set((state) => ({
-    complaints: state.complaints.map((c) => c.id === id ? { ...c, ...updates } : c),
+    complaints: state.complaints.map((c) => (c.id === id ? { ...c, ...updates } : c)),
   })),
 
   addPricingRule: (rule) => set((state) => ({
@@ -88,7 +120,7 @@ export const useAppStore = create<AppState>((set) => ({
   })),
 
   updatePricingRule: (id, updates) => set((state) => ({
-    pricingRules: state.pricingRules.map((r) => r.id === id ? { ...r, ...updates } : r),
+    pricingRules: state.pricingRules.map((r) => (r.id === id ? { ...r, ...updates } : r)),
   })),
 
   deletePricingRule: (id) => set((state) => ({
