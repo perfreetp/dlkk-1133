@@ -12,8 +12,10 @@ export default function Complaints() {
   const complaints = useAppStore((s) => s.complaints);
   const updateComplaint = useAppStore((s) => s.updateComplaint);
   const [activeTab, setActiveTab] = useState<'all' | Complaint['type']>('all');
-  const [selected, setSelected] = useState<Complaint | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reply, setReply] = useState('');
+
+  const selected = complaints.find(c => c.id === selectedId) || null;
 
   const typeConfig: Record<string, { label: string; icon: typeof AlertTriangle; color: string; bg: string }> = {
     parking: { label: '乱停乱放', icon: MapPin, color: 'text-amber-600', bg: 'bg-amber-100' },
@@ -76,10 +78,10 @@ export default function Complaints() {
             return (
               <div
                 key={c.id}
-                onClick={() => setSelected(c)}
+                onClick={() => setSelectedId(c.id)}
                 className={clsx(
                   'bg-white rounded-xl p-4 shadow-sm border border-slate-100 hover:shadow-md transition-all cursor-pointer',
-                  selected?.id === c.id && 'ring-2 ring-blue-500'
+                  selectedId === c.id && 'ring-2 ring-blue-500'
                 )}
               >
                 <div className="flex items-start gap-3">

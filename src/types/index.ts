@@ -19,6 +19,9 @@ export interface Station {
   lng: number;
   type: 'normal' | 'premium' | 'restricted';
   address: string;
+  fenceRadius: number;
+  noParkingZones: string[];
+  recommendedReturn: boolean;
 }
 
 export interface DispatchTask {

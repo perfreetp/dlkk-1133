@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   ClipboardCheck, Plus, Camera, User, CheckCircle, Clock, PlayCircle,
-  Battery, Disc, Wrench, Tag, AlertCircle, ChevronRight, X
+  Battery, Disc, Wrench, Tag, AlertCircle, ChevronRight, X, Trash2
 } from 'lucide-react';
 import { useAppStore } from '@/store';
 import StatusBadge from '@/components/StatusBadge';
@@ -15,9 +15,23 @@ export default function Inspection() {
   const addInspectionOrder = useAppStore((s) => s.addInspectionOrder);
 
   const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'in_progress' | 'completed' | 'reviewed'>('all');
-  const [selectedOrder, setSelectedOrder] = useState<InspectionOrder | null>(null);
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [newOrder, setNewOrder] = useState({ vehicleId: '', category: 'other' as InspectionOrder['category'], description: '' });
+  const [newOrder, setNewOrder] = useState({
+    vehicleId: '',
+    category: 'other' as InspectionOrder['category'],
+    description: '',
+    photos: [] as string[],
+  });
+  const [toast, setToast] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const selectedOrder = orders.find(o => o.id === selectedOrderId) || null;
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2000);
+  };
 
   const categoryConfig: Record<string, { label: string; icon: typeof Battery; color: string; bg: string }> = {
     battery: { label: '电池故障', icon: Battery, color: 'text-orange-600', bg: 'bg-orange-100' },
@@ -32,23 +46,60 @@ export default function Inspection() {
 
   const getVehicleCode = (id: string) => vehicles.find(v => v.id === id)?.code || '-';
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    const readers: Promise<string>[] = [];
+    for (let i = 0; i < files.length; i++) {
+      readers.push(
+        new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(files[i]);
+        })
+      );
+    }
+    Promise.all(readers).then((dataUrls) => {
+      setNewOrder(prev => ({ ...prev, photos: [...prev.photos, ...dataUrls] }));
+    });
+    e.target.value = '';
+  };
+
+  const handleRemovePhoto = (index: number) => {
+    setNewOrder(prev => ({
+      ...prev,
+      photos: prev.photos.filter((_, i) => i !== index),
+    }));
+  };
+
   const handleCreate = () => {
     if (!newOrder.vehicleId || !newOrder.description) return;
     addInspectionOrder({
       vehicleId: newOrder.vehicleId,
       category: newOrder.category,
       status: 'pending',
-      photos: [],
+      photos: newOrder.photos,
       description: newOrder.description,
       createdAt: new Date().toLocaleString(),
     });
     setShowCreateModal(false);
-    setNewOrder({ vehicleId: '', category: 'other', description: '' });
+    setNewOrder({ vehicleId: '', category: 'other', description: '', photos: [] });
+    showToast('工单已创建');
   };
 
-  const handleStart = (id: string) => updateInspectionOrder(id, { status: 'in_progress', assignee: '当前用户' });
-  const handleComplete = (id: string) => updateInspectionOrder(id, { status: 'completed', completedAt: new Date().toLocaleString(), repairNote: '已修复' });
-  const handleReview = (id: string) => updateInspectionOrder(id, { status: 'reviewed' });
+  const handleStart = (id: string) => {
+    updateInspectionOrder(id, { status: 'in_progress', assignee: '当前用户' });
+    showToast('工单已开始处理');
+  };
+  const handleComplete = (id: string) => {
+    updateInspectionOrder(id, { status: 'completed', completedAt: new Date().toLocaleString(), repairNote: '已修复' });
+    showToast('维修已完成');
+  };
+  const handleReview = (id: string) => {
+    updateInspectionOrder(id, { status: 'reviewed' });
+    showToast('复核已通过');
+  };
 
   const tabConfig = [
     { key: 'all', label: '全部', count: orders.length },
@@ -58,8 +109,20 @@ export default function Inspection() {
     { key: 'reviewed', label: '已复核', count: orders.filter(o => o.status === 'reviewed').length },
   ] as const;
 
+  const photoSlots = (photos: string[], totalSlots = 3) => {
+    const slots: (string | null)[] = [...photos];
+    while (slots.length < totalSlots) slots.push(null);
+    return slots.slice(0, Math.max(photos.length, totalSlots));
+  };
+
   return (
     <div className="space-y-6">
+      {toast && (
+        <div className="fixed top-20 right-6 z-50 flex items-center gap-2 px-4 py-3 bg-emerald-600 text-white rounded-lg shadow-lg animate-pulse">
+          <CheckCircle className="w-5 h-5" /> {toast}
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-slate-200">
           {tabConfig.map((tab) => (
@@ -99,10 +162,10 @@ export default function Inspection() {
             return (
               <div
                 key={order.id}
-                onClick={() => setSelectedOrder(order)}
+                onClick={() => setSelectedOrderId(order.id)}
                 className={clsx(
                   'bg-white rounded-xl p-4 shadow-sm border border-slate-100 hover:shadow-md transition-all cursor-pointer',
-                  selectedOrder?.id === order.id && 'ring-2 ring-blue-500'
+                  selectedOrderId === order.id && 'ring-2 ring-blue-500'
                 )}
               >
                 <div className="flex items-start gap-4">
@@ -145,7 +208,7 @@ export default function Inspection() {
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 flex flex-col h-fit sticky top-0">
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-bold text-slate-800">工单详情</h3>
-              <button onClick={() => setSelectedOrder(null)} className="p-1.5 hover:bg-slate-100 rounded-lg">
+              <button onClick={() => setSelectedOrderId(null)} className="p-1.5 hover:bg-slate-100 rounded-lg">
                 <X className="w-5 h-5 text-slate-400" />
               </button>
             </div>
@@ -178,9 +241,13 @@ export default function Inspection() {
               <div>
                 <p className="text-sm text-slate-500 mb-2">现场照片</p>
                 <div className="grid grid-cols-3 gap-2">
-                  {[1, 2, 3].map((n) => (
-                    <div key={n} className="aspect-square bg-slate-100 rounded-lg flex items-center justify-center">
-                      <Camera className="w-6 h-6 text-slate-400" />
+                  {photoSlots(selectedOrder.photos).map((photo, idx) => (
+                    <div key={idx} className="aspect-square bg-slate-100 rounded-lg flex items-center justify-center overflow-hidden">
+                      {photo ? (
+                        <img src={photo} alt={`照片 ${idx + 1}`} className="w-full h-full object-cover" />
+                      ) : (
+                        <Camera className="w-6 h-6 text-slate-400" />
+                      )}
                     </div>
                   ))}
                 </div>
@@ -231,7 +298,7 @@ export default function Inspection() {
 
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-lg font-bold text-slate-800">新建巡检工单</h3>
               <button onClick={() => setShowCreateModal(false)} className="p-1.5 hover:bg-slate-100 rounded-lg">
@@ -291,10 +358,37 @@ export default function Inspection() {
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">上传照片</label>
-                <div className="border-2 border-dashed border-slate-200 rounded-lg p-6 text-center hover:border-blue-400 hover:bg-blue-50/50 transition-colors cursor-pointer">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className="border-2 border-dashed border-slate-200 rounded-lg p-6 text-center hover:border-blue-400 hover:bg-blue-50/50 transition-colors cursor-pointer"
+                >
                   <Camera className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-                  <p className="text-sm text-slate-500">点击上传或拖拽照片到此处</p>
+                  <p className="text-sm text-slate-500">点击上传照片</p>
+                  <p className="text-xs text-slate-400 mt-1">支持多选，仅限图片格式</p>
                 </div>
+                {newOrder.photos.length > 0 && (
+                  <div className="grid grid-cols-3 gap-2 mt-2">
+                    {newOrder.photos.map((photo, idx) => (
+                      <div key={idx} className="aspect-square bg-slate-100 rounded-lg overflow-hidden relative group">
+                        <img src={photo} alt={`预览 ${idx + 1}`} className="w-full h-full object-cover" />
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleRemovePhoto(idx); }}
+                          className="absolute top-1 right-1 w-5 h-5 bg-black/50 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 

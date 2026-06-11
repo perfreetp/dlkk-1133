@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Search, MapPin, Lock, Unlock, Battery, X, History, Zap, Filter } from 'lucide-react';
+import { Search, MapPin, Lock, Unlock, Battery, X, History, Zap, Filter, Crosshair, Navigation } from 'lucide-react';
 import { useAppStore } from '@/store';
 import StatusBadge from '@/components/StatusBadge';
 import BatteryIndicator from '@/components/BatteryIndicator';
@@ -8,14 +8,17 @@ import { clsx } from 'clsx';
 export default function Vehicles() {
   const vehicles = useAppStore((s) => s.vehicles);
   const stations = useAppStore((s) => s.stations);
-  const selectedVehicle = useAppStore((s) => s.selectedVehicle);
-  const setSelectedVehicle = useAppStore((s) => s.setSelectedVehicle);
+  const selectedVehicleId = useAppStore((s) => s.selectedVehicleId);
+  const setSelectedVehicleId = useAppStore((s) => s.setSelectedVehicleId);
   const lockVehicle = useAppStore((s) => s.lockVehicle);
   const unlockVehicle = useAppStore((s) => s.unlockVehicle);
+
+  const selectedVehicle = vehicles.find(v => v.id === selectedVehicleId) || null;
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [batteryFilter, setBatteryFilter] = useState<string>('all');
+  const [showLocation, setShowLocation] = useState<string | null>(null);
 
   const getStationName = (id?: string) => stations.find(s => s.id === id)?.name || '骑行中/未入站';
 
@@ -28,6 +31,8 @@ export default function Vehicles() {
       || (batteryFilter === 'high' && v.battery >= 60);
     return matchSearch && matchStatus && matchBattery;
   });
+
+  const locationVehicle = showLocation ? vehicles.find(v => v.id === showLocation) : null;
 
   const batteryRecords = [
     { date: '2026-06-12 08:00', from: 15, to: 95, station: '人民广场站' },
@@ -100,10 +105,10 @@ export default function Vehicles() {
                 {filteredVehicles.map((v) => (
                   <tr
                     key={v.id}
-                    onClick={() => setSelectedVehicle(v)}
+                    onClick={() => setSelectedVehicleId(v.id)}
                     className={clsx(
                       'hover:bg-blue-50/50 cursor-pointer transition-colors',
-                      selectedVehicle?.id === v.id && 'bg-blue-50'
+                      selectedVehicleId === v.id && 'bg-blue-50'
                     )}
                   >
                     <td className="px-5 py-4">
@@ -126,6 +131,7 @@ export default function Vehicles() {
                     <td className="px-5 py-4 text-right">
                       <div className="flex items-center justify-end gap-2">
                         <button
+                          onClick={(e) => { e.stopPropagation(); setShowLocation(v.id); }}
                           className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                           title="地图定位"
                         >
@@ -163,7 +169,7 @@ export default function Vehicles() {
           <div className="p-5 border-b border-slate-100 flex items-center justify-between">
             <h3 className="text-lg font-bold text-slate-800">车辆详情</h3>
             <button
-              onClick={() => setSelectedVehicle(null)}
+              onClick={() => setSelectedVehicleId(null)}
               className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
             >
               <X className="w-5 h-5 text-slate-400" />
@@ -223,7 +229,10 @@ export default function Vehicles() {
                   <Lock className="w-4 h-4" /> 远程锁车
                 </button>
               )}
-              <button className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-medium text-sm">
+              <button
+                onClick={() => setShowLocation(selectedVehicle.id)}
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-medium text-sm"
+              >
                 <MapPin className="w-4 h-4" /> 定位
               </button>
             </div>
@@ -248,6 +257,86 @@ export default function Vehicles() {
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {locationVehicle && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-2xl w-[520px] max-w-[90vw] overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 bg-blue-100 rounded-lg flex items-center justify-center">
+                  <MapPin className="w-5 h-5 text-blue-600" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800">{locationVehicle.code} 位置信息</h3>
+                  <p className="text-xs text-slate-500">实时定位</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowLocation(null)}
+                className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+
+            <div className="px-6 py-4">
+              <div className="relative w-full h-64 bg-gradient-to-br from-blue-50 via-cyan-50 to-emerald-50 rounded-xl border border-slate-200 overflow-hidden">
+                <div className="absolute inset-0 opacity-30" style={{
+                  backgroundImage: 'radial-gradient(circle, #94a3b8 1px, transparent 1px)',
+                  backgroundSize: '24px 24px',
+                }} />
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <div className="relative">
+                    <div className="w-12 h-12 bg-red-500 rounded-full flex items-center justify-center shadow-lg shadow-red-500/40 animate-pulse">
+                      <MapPin className="w-6 h-6 text-white" />
+                    </div>
+                    <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-4 bg-red-500 rotate-45 -z-10" />
+                  </div>
+                  <div className="mt-3 px-3 py-1.5 bg-white/90 backdrop-blur-sm rounded-lg shadow-sm border border-slate-200">
+                    <p className="text-xs font-semibold text-slate-700">{locationVehicle.code}</p>
+                  </div>
+                </div>
+                <div className="absolute top-3 left-3 flex items-center gap-1.5 px-2 py-1 bg-white/80 backdrop-blur-sm rounded-md shadow-sm border border-slate-200">
+                  <Crosshair className="w-3.5 h-3.5 text-blue-500" />
+                  <span className="text-xs font-medium text-slate-600">实时定位</span>
+                </div>
+                <div className="absolute bottom-3 right-3 flex items-center gap-1 px-2 py-1 bg-white/80 backdrop-blur-sm rounded-md shadow-sm border border-slate-200">
+                  <Navigation className="w-3.5 h-3.5 text-emerald-500" />
+                  <span className="text-xs text-slate-600">{locationVehicle.lat.toFixed(4)}°N, {locationVehicle.lng.toFixed(4)}°E</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 pb-4 space-y-2">
+              <div className="flex items-center justify-between py-2.5 px-4 bg-slate-50 rounded-lg">
+                <span className="text-sm text-slate-500">纬度 (Lat)</span>
+                <span className="text-sm font-semibold text-slate-800 font-mono">{locationVehicle.lat.toFixed(6)}</span>
+              </div>
+              <div className="flex items-center justify-between py-2.5 px-4 bg-slate-50 rounded-lg">
+                <span className="text-sm text-slate-500">经度 (Lng)</span>
+                <span className="text-sm font-semibold text-slate-800 font-mono">{locationVehicle.lng.toFixed(6)}</span>
+              </div>
+              <div className="flex items-center justify-between py-2.5 px-4 bg-slate-50 rounded-lg">
+                <span className="text-sm text-slate-500">所属站点</span>
+                <span className="text-sm font-semibold text-slate-800">{getStationName(locationVehicle.stationId)}</span>
+              </div>
+              <div className="flex items-center justify-between py-2.5 px-4 bg-slate-50 rounded-lg">
+                <span className="text-sm text-slate-500">车辆状态</span>
+                <StatusBadge status={locationVehicle.status} />
+              </div>
+            </div>
+
+            <div className="px-6 pb-6">
+              <button
+                onClick={() => setShowLocation(null)}
+                className="w-full py-2.5 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors font-medium text-sm"
+              >
+                关闭
+              </button>
             </div>
           </div>
         </div>

@@ -19,12 +19,12 @@ export const mockVehicles: Vehicle[] = [
 ];
 
 export const mockStations: Station[] = [
-  { id: 's1', name: '人民广场站', capacity: 50, currentCount: 32, lat: 31.2304, lng: 121.4737, type: 'premium', address: '黄浦区人民大道' },
-  { id: 's2', name: '南京东路站', capacity: 40, currentCount: 38, lat: 31.2254, lng: 121.4687, type: 'premium', address: '黄浦区南京东路' },
-  { id: 's3', name: '陆家嘴站', capacity: 60, currentCount: 8, lat: 31.2404, lng: 121.4837, type: 'premium', address: '浦东新区陆家嘴环路' },
-  { id: 's4', name: '静安寺站', capacity: 45, currentCount: 22, lat: 31.2384, lng: 121.4707, type: 'normal', address: '静安区南京西路' },
-  { id: 's5', name: '徐家汇站', capacity: 55, currentCount: 48, lat: 31.1954, lng: 121.4367, type: 'normal', address: '徐汇区虹桥路' },
-  { id: 's6', name: '中山公园站', capacity: 35, currentCount: 5, lat: 31.2204, lng: 121.4207, type: 'restricted', address: '长宁区长宁路' },
+  { id: 's1', name: '人民广场站', capacity: 50, currentCount: 32, lat: 31.2304, lng: 121.4737, type: 'premium', address: '黄浦区人民大道', fenceRadius: 200, noParkingZones: ['西藏南路路段'], recommendedReturn: true },
+  { id: 's2', name: '南京东路站', capacity: 40, currentCount: 38, lat: 31.2254, lng: 121.4687, type: 'premium', address: '黄浦区南京东路', fenceRadius: 150, noParkingZones: ['外滩观光区'], recommendedReturn: true },
+  { id: 's3', name: '陆家嘴站', capacity: 60, currentCount: 8, lat: 31.2404, lng: 121.4837, type: 'premium', address: '浦东新区陆家嘴环路', fenceRadius: 250, noParkingZones: [], recommendedReturn: true },
+  { id: 's4', name: '静安寺站', capacity: 45, currentCount: 22, lat: 31.2384, lng: 121.4707, type: 'normal', address: '静安区南京西路', fenceRadius: 180, noParkingZones: ['静安公园'], recommendedReturn: false },
+  { id: 's5', name: '徐家汇站', capacity: 55, currentCount: 48, lat: 31.1954, lng: 121.4367, type: 'normal', address: '徐汇区虹桥路', fenceRadius: 220, noParkingZones: ['徐家汇天主堂'], recommendedReturn: true },
+  { id: 's6', name: '中山公园站', capacity: 35, currentCount: 5, lat: 31.2204, lng: 121.4207, type: 'restricted', address: '长宁区长宁路', fenceRadius: 120, noParkingZones: ['中山公园内部', '长宁路步行街'], recommendedReturn: false },
 ];
 
 export const mockDispatchTasks: DispatchTask[] = [
