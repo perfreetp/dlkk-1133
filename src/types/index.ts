@@ -30,6 +30,7 @@ export interface DispatchTask {
   priority: 'high' | 'medium' | 'low';
   status: 'pending' | 'in_progress' | 'completed';
   vehicleId?: string;
+  vehicleIds?: string[];
   fromStationId?: string;
   toStationId?: string;
   assignee?: string;
@@ -37,6 +38,15 @@ export interface DispatchTask {
   note?: string;
   vehicleCount?: number;
 }
+
+export interface DispatchExecutionResult {
+  success: boolean;
+  movedCount: number;
+  skippedCount: number;
+  reason?: string;
+}
+
+
 
 export interface InspectionOrder {
   id: string;

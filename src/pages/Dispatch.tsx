@@ -2,18 +2,16 @@ import { useState, useEffect } from 'react';
 import {
   Truck, Zap, AlertTriangle, ArrowRight, User, CheckCircle, Clock,
   PlayCircle, X, Settings, MapPin, AlertCircle, Route, Plus, Battery,
-  Info, CheckSquare, Square
+  Info, CheckSquare, Square, Edit3, Ban
 } from 'lucide-react';
 import { useAppStore } from '@/store';
 import StatusBadge from '@/components/StatusBadge';
 import { clsx } from 'clsx';
-import type { DispatchTask, Vehicle } from '@/types';
+import type { DispatchTask, Vehicle, DispatchExecutionResult } from '@/types';
 
 type TaskType = 'shortage' | 'overflow' | 'low_battery';
 type Priority = 'high' | 'medium' | 'low';
 type ShortageSource = 'station' | 'specific' | '';
-
-type DispatchTaskWithVehicleIds = DispatchTask & { vehicleIds?: string[] };
 
 interface PlannerForm {
   type: TaskType;
@@ -25,6 +23,11 @@ interface PlannerForm {
   priority: Priority;
   note: string;
   source: ShortageSource;
+}
+
+interface ValidationResult {
+  valid: boolean;
+  errors: string[];
 }
 
 const emptyForm: PlannerForm = {
@@ -52,10 +55,12 @@ export default function Dispatch() {
   const [form, setForm] = useState<PlannerForm>(emptyForm);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [pathPopupTaskId, setPathPopupTaskId] = useState<string | null>(null);
+  const [editingTask, setEditingTask] = useState<DispatchTask | null>(null);
+  const [editForm, setEditForm] = useState<PlannerForm>(emptyForm);
 
   useEffect(() => {
     if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 2500);
+    const timer = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(timer);
   }, [toast]);
 
@@ -97,14 +102,82 @@ export default function Dispatch() {
     return vehicles.filter(v => v.status === 'online');
   };
 
+  const getTaskVehicleIds = (task: DispatchTask): string[] => {
+    if (task.vehicleIds && task.vehicleIds.length > 0) return task.vehicleIds;
+    if (task.vehicleId) return [task.vehicleId];
+    return [];
+  };
+
+  const validateTask = (task: DispatchTask): ValidationResult => {
+    const errors: string[] = [];
+
+    if (task.type === 'low_battery') {
+      if (!task.vehicleId && (!task.vehicleIds || task.vehicleIds.length === 0)) {
+        errors.push('缺少需要换电的车辆');
+      }
+      return { valid: errors.length === 0, errors };
+    }
+
+    if (!task.toStationId) {
+      errors.push('缺少调入站点（目标站）');
+    }
+
+    const vehicleIds = getTaskVehicleIds(task);
+    if (vehicleIds.length === 0) {
+      errors.push('缺少车辆清单');
+    }
+
+    if (task.type === 'overflow') {
+      if (!task.fromStationId) {
+        errors.push('缺少调出站点（来源站）');
+      }
+    }
+
+    if (task.type === 'shortage') {
+      if (vehicleIds.length > 0) {
+        const hasAnySource = vehicleIds.some(vid => {
+          const v = vehicles.find(x => x.id === vid);
+          return v?.stationId || task.fromStationId;
+        });
+        if (!task.fromStationId && !hasAnySource) {
+          errors.push('缺少调出来源（没有调出站点也没有任何车辆的来源信息）');
+        }
+      } else {
+        if (!task.fromStationId) {
+          errors.push('缺少调出来源（没有调出站点也没有车辆清单）');
+        }
+      }
+    }
+
+    return { valid: errors.length === 0, errors };
+  };
+
   const openPlanner = () => {
     setForm(emptyForm);
+    setEditingTask(null);
     setShowPlanner(true);
   };
 
   const closePlanner = () => {
     setShowPlanner(false);
     setForm(emptyForm);
+    setEditingTask(null);
+  };
+
+  const openEditor = (task: DispatchTask) => {
+    setEditingTask(task);
+    setEditForm({
+      type: task.type,
+      toStationId: task.toStationId || '',
+      fromStationId: task.fromStationId || '',
+      vehicleCount: (task.vehicleCount || 0).toString(),
+      vehicleId: task.vehicleId || '',
+      vehicleIds: getTaskVehicleIds(task),
+      priority: task.priority,
+      note: task.note || '',
+      source: task.fromStationId ? 'station' : 'specific',
+    });
+    setShowPlanner(true);
   };
 
   const updateForm = (field: keyof PlannerForm, value: string | string[] | ShortageSource) => {
@@ -115,6 +188,24 @@ export default function Dispatch() {
         updated.vehicleCount = '';
       }
       if (field === 'source' || (field === 'fromStationId' && form.type === 'shortage')) {
+        updated.vehicleIds = [];
+        updated.vehicleCount = '';
+      }
+      if (field === 'vehicleIds' && Array.isArray(value)) {
+        updated.vehicleCount = value.length.toString();
+      }
+      return updated;
+    });
+  };
+
+  const updateEditForm = (field: keyof PlannerForm, value: string | string[] | ShortageSource) => {
+    setEditForm((prev) => {
+      const updated = { ...prev, [field]: value };
+      if (field === 'fromStationId') {
+        updated.vehicleIds = [];
+        updated.vehicleCount = '';
+      }
+      if (field === 'source') {
         updated.vehicleIds = [];
         updated.vehicleCount = '';
       }
@@ -138,33 +229,36 @@ export default function Dispatch() {
     });
   };
 
-  const toggleSelectAllVehicles = (vehicleList: Vehicle[]) => {
+  const toggleEditVehicleId = (vehicleId: string) => {
+    setEditForm((prev) => {
+      const newIds = prev.vehicleIds.includes(vehicleId)
+        ? prev.vehicleIds.filter(id => id !== vehicleId)
+        : [...prev.vehicleIds, vehicleId];
+      return {
+        ...prev,
+        vehicleIds: newIds,
+        vehicleCount: newIds.length.toString(),
+      };
+    });
+  };
+
+  const toggleSelectAllVehicles = (vehicleList: Vehicle[], target: 'form' | 'edit' = 'form') => {
     const allIds = vehicleList.map(v => v.id);
-    const allSelected = vehicleList.every(v => form.vehicleIds.includes(v.id));
-    setForm((prev) => ({
+    const currentIds = target === 'form' ? form.vehicleIds : editForm.vehicleIds;
+    const allSelected = vehicleList.every(v => currentIds.includes(v.id));
+    const setter = target === 'form' ? setForm : setEditForm;
+    setter((prev) => ({
       ...prev,
       vehicleIds: allSelected ? [] : allIds,
       vehicleCount: allSelected ? '0' : allIds.length.toString(),
     }));
   };
 
-
-
   const renderVehicleChips = (task: DispatchTask) => {
-    let vehicleList: { id: string; code: string }[] = [];
-    const t = task as DispatchTaskWithVehicleIds;
-    
-    if (t.vehicleIds && t.vehicleIds.length > 0) {
-      vehicleList = t.vehicleIds.map(id => ({
-        id,
-        code: getVehicleCode(id)
-      }));
-    } else if (t.vehicleId) {
-      vehicleList = [{ id: t.vehicleId, code: getVehicleCode(t.vehicleId) }];
-    }
+    const ids = getTaskVehicleIds(task);
+    if (ids.length === 0) return null;
 
-    if (vehicleList.length === 0) return null;
-
+    const vehicleList = ids.map(id => ({ id, code: getVehicleCode(id) }));
     const displayVehicles = vehicleList.slice(0, 3);
     const remaining = vehicleList.length - 3;
 
@@ -187,84 +281,147 @@ export default function Dispatch() {
     );
   };
 
+  const getSourceStationsSummary = (task: DispatchTask): string => {
+    const ids = getTaskVehicleIds(task);
+    if (ids.length === 0) return '-';
+    const stationMap = new Map<string, number>();
+    ids.forEach(vid => {
+      const v = vehicles.find(x => x.id === vid);
+      if (v?.stationId) {
+        stationMap.set(v.stationId, (stationMap.get(v.stationId) || 0) + 1);
+      }
+    });
+    if (stationMap.size === 0) return '-';
+    const parts: string[] = [];
+    stationMap.forEach((count, sid) => {
+      parts.push(`${getStationName(sid)} × ${count}`);
+    });
+    return parts.join('，');
+  };
+
   const handleGenerateTask = () => {
-    if (form.type === 'shortage') {
-      if (!form.source) {
+    const targetForm = editingTask ? editForm : form;
+
+    if (targetForm.type === 'shortage') {
+      if (!targetForm.source) {
         showToast('请先选择调出来源', 'error');
         return;
       }
-      if (!form.toStationId) {
+      if (!targetForm.toStationId) {
         showToast('请选择目标站点', 'error');
         return;
       }
-      if (form.source === 'station' && !form.fromStationId) {
+      if (targetForm.source === 'station' && !targetForm.fromStationId) {
         showToast('请选择调出站点', 'error');
         return;
       }
-      if (form.vehicleIds.length === 0) {
+      if (targetForm.vehicleIds.length === 0) {
         showToast('请至少选择一辆车', 'error');
         return;
       }
-    } else if (form.type === 'overflow') {
-      if (!form.fromStationId) {
+      const toStation = stations.find(s => s.id === targetForm.toStationId);
+      if (toStation) {
+        const remaining = toStation.capacity - toStation.currentCount;
+        if (targetForm.vehicleIds.length > remaining) {
+          showToast(`目标站点仅剩 ${remaining} 个车位，将只调入 ${remaining} 辆`, 'error');
+        }
+      }
+    } else if (targetForm.type === 'overflow') {
+      if (!targetForm.fromStationId) {
         showToast('请选择调出站点', 'error');
         return;
       }
-      if (!form.toStationId) {
+      if (!targetForm.toStationId) {
         showToast('请选择调入站点', 'error');
         return;
       }
-      if (form.fromStationId === form.toStationId) {
+      if (targetForm.fromStationId === targetForm.toStationId) {
         showToast('调出站点和调入站点不能相同', 'error');
         return;
       }
-      if (form.vehicleIds.length === 0) {
+      if (targetForm.vehicleIds.length === 0) {
         showToast('请至少选择一辆车', 'error');
         return;
       }
-    } else if (form.type === 'low_battery') {
-      if (!form.vehicleId) {
+      const toStation = stations.find(s => s.id === targetForm.toStationId);
+      if (toStation) {
+        const remaining = toStation.capacity - toStation.currentCount;
+        if (targetForm.vehicleIds.length > remaining) {
+          showToast(`调入站点仅剩 ${remaining} 个车位，将只调入 ${remaining} 辆`, 'error');
+        }
+      }
+    } else if (targetForm.type === 'low_battery') {
+      if (!targetForm.vehicleId) {
         showToast('请选择车辆', 'error');
         return;
       }
     }
 
-    const taskData: Omit<DispatchTask, 'id'> & { vehicleIds?: string[] } = {
-      type: form.type,
-      priority: form.priority,
+    const taskData: Omit<DispatchTask, 'id'> = {
+      type: targetForm.type,
+      priority: targetForm.priority,
       status: 'pending',
-      createdAt: new Date().toLocaleString(),
-      note: form.note.trim() || undefined,
+      createdAt: editingTask ? (editingTask.createdAt || new Date().toLocaleString()) : new Date().toLocaleString(),
+      note: targetForm.note.trim() || undefined,
     };
 
-    if (form.type === 'shortage') {
-      taskData.toStationId = form.toStationId;
-      taskData.vehicleCount = form.vehicleIds.length;
-      taskData.vehicleIds = [...form.vehicleIds];
-      if (form.source === 'station') {
-        taskData.fromStationId = form.fromStationId;
-      } else if (form.source === 'specific') {
-        const firstVehicle = vehicles.find(v => v.id === form.vehicleIds[0]);
+    if (targetForm.type === 'shortage') {
+      taskData.toStationId = targetForm.toStationId;
+      taskData.vehicleCount = targetForm.vehicleIds.length;
+      taskData.vehicleIds = [...targetForm.vehicleIds];
+      if (targetForm.source === 'station') {
+        taskData.fromStationId = targetForm.fromStationId;
+      } else if (targetForm.source === 'specific') {
+        const firstVehicle = vehicles.find(v => v.id === targetForm.vehicleIds[0]);
         if (firstVehicle?.stationId) {
           taskData.fromStationId = firstVehicle.stationId;
         }
       }
-    } else if (form.type === 'overflow') {
-      taskData.fromStationId = form.fromStationId;
-      taskData.toStationId = form.toStationId;
-      taskData.vehicleCount = form.vehicleIds.length;
-      taskData.vehicleIds = [...form.vehicleIds];
-    } else if (form.type === 'low_battery') {
-      taskData.vehicleId = form.vehicleId;
-      taskData.vehicleIds = [form.vehicleId];
+    } else if (targetForm.type === 'overflow') {
+      taskData.fromStationId = targetForm.fromStationId;
+      taskData.toStationId = targetForm.toStationId;
+      taskData.vehicleCount = targetForm.vehicleIds.length;
+      taskData.vehicleIds = [...targetForm.vehicleIds];
+    } else if (targetForm.type === 'low_battery') {
+      taskData.vehicleId = targetForm.vehicleId;
+      taskData.vehicleIds = [targetForm.vehicleId];
     }
 
-    addDispatchTask(taskData as Omit<DispatchTask, 'id'>);
-    showToast('调度任务已创建');
+    if (editingTask) {
+      updateDispatchTask(editingTask.id, taskData);
+      showToast('任务信息已更新');
+    } else {
+      addDispatchTask(taskData);
+      showToast('调度任务已创建');
+    }
     closePlanner();
   };
 
   const handleStart = (id: string) => {
+    const task = tasks.find(t => t.id === id);
+    if (!task) return;
+
+    const validation = validateTask(task);
+    if (!validation.valid) {
+      showToast(`任务信息不完整：${validation.errors[0]}`, 'error');
+      return;
+    }
+
+    if (task.type !== 'low_battery' && task.toStationId) {
+      const toStation = stations.find(s => s.id === task.toStationId);
+      if (toStation) {
+        const remaining = toStation.capacity - toStation.currentCount;
+        const count = getTaskVehicleIds(task).length;
+        if (remaining === 0) {
+          showToast('调入站点已饱和，无法执行，请更换目标站', 'error');
+          return;
+        }
+        if (count > remaining) {
+          showToast(`调入站点仅剩 ${remaining} 个车位，将只调入 ${remaining} 辆`, 'error');
+        }
+      }
+    }
+
     updateDispatchTask(id, { status: 'in_progress', assignee: '当前用户' });
     showToast('任务已开始执行');
   };
@@ -272,44 +429,33 @@ export default function Dispatch() {
   const handleExecute = (id: string) => {
     const task = tasks.find(t => t.id === id);
     if (!task) return;
-    const t = task as DispatchTaskWithVehicleIds;
 
-    if (t.type === 'shortage' && !t.fromStationId) {
-      showToast('请先选择调出站点', 'error');
+    const validation = validateTask(task);
+    if (!validation.valid) {
+      showToast(`任务信息不完整：${validation.errors[0]}`, 'error');
       return;
     }
 
-    const selectedCount = t.vehicleIds?.length || t.vehicleCount || 0;
-    if (selectedCount === 0) {
-      showToast('没有可调度的车辆', 'error');
-      return;
-    }
-
-    if (task.fromStationId) {
-      const fromStation = stations.find(s => s.id === task.fromStationId);
-      if (!fromStation || fromStation.currentCount === 0) {
-        showToast('调出站点没有可用车辆', 'error');
-        return;
+    const result: DispatchExecutionResult = executeDispatchTask(id);
+    if (result.success) {
+      if (result.skippedCount > 0) {
+        showToast(`任务完成，成功调入 ${result.movedCount} 辆，因容量/状态跳过 ${result.skippedCount} 辆`);
+      } else {
+        showToast(`任务执行完成，成功调入 ${result.movedCount} 辆，站点数据已同步更新`);
       }
-      const actualCount = Math.min(selectedCount, fromStation.currentCount);
-      if (actualCount <= 0) {
-        showToast('调出站点车辆不足', 'error');
-        return;
-      }
+    } else {
+      showToast(`执行失败：${result.reason || '未知错误'}`, 'error');
     }
-
-    executeDispatchTask(id);
-    showToast('任务执行完成，站点数据已更新');
   };
 
   const renderPathPopup = (task: DispatchTask) => {
-    const t = task as DispatchTaskWithVehicleIds;
-    const fromStation = t.fromStationId ? stations.find(s => s.id === t.fromStationId) : null;
-    const toStation = t.toStationId ? stations.find(s => s.id === t.toStationId) : null;
-    const vehicleCount = t.vehicleIds?.length || t.vehicleCount || 0;
+    const fromStation = task.fromStationId ? stations.find(s => s.id === task.fromStationId) : null;
+    const toStation = task.toStationId ? stations.find(s => s.id === task.toStationId) : null;
+    const vehicleCount = getTaskVehicleIds(task).length;
+    const sourceSummary = getSourceStationsSummary(task);
 
     return (
-      <div className="absolute z-20 top-full mt-2 left-0 w-64 bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden">
+      <div className="absolute z-20 top-full mt-2 left-0 w-72 bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden">
         <div className="p-3 bg-gradient-to-r from-blue-50 to-cyan-50 border-b border-slate-100">
           <div className="flex items-center gap-2">
             <Route className="w-4 h-4 text-blue-600" />
@@ -318,7 +464,7 @@ export default function Dispatch() {
         </div>
         <div className="p-4">
           <div className="relative">
-            {fromStation && (
+            {(fromStation || sourceSummary !== '-') && (
               <div className="flex items-start gap-3">
                 <div className="flex flex-col items-center">
                   <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
@@ -327,9 +473,15 @@ export default function Dispatch() {
                   <div className="w-0.5 h-10 bg-slate-200" />
                 </div>
                 <div className="pb-4">
-                  <p className="text-xs text-slate-500">起点</p>
-                  <p className="text-sm font-semibold text-slate-800">{fromStation.name}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">{fromStation.address}</p>
+                  <p className="text-xs text-slate-500">调出来源</p>
+                  {fromStation ? (
+                    <>
+                      <p className="text-sm font-semibold text-slate-800">{fromStation.name}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">{fromStation.address}</p>
+                    </>
+                  ) : (
+                    <p className="text-sm font-medium text-slate-700">{sourceSummary}</p>
+                  )}
                 </div>
               </div>
             )}
@@ -341,7 +493,7 @@ export default function Dispatch() {
                   </div>
                 </div>
                 <div>
-                  <p className="text-xs text-slate-500">终点</p>
+                  <p className="text-xs text-slate-500">调入站点</p>
                   <p className="text-sm font-semibold text-slate-800">{toStation.name}</p>
                   <p className="text-xs text-slate-400 mt-0.5">{toStation.address}</p>
                 </div>
@@ -360,15 +512,39 @@ export default function Dispatch() {
   };
 
   const renderTaskCard = (task: DispatchTask) => {
-    const t = task as DispatchTaskWithVehicleIds;
-    const cfg = typeConfig[t.type];
-    const priCfg = priorityMap[t.priority];
+    const cfg = typeConfig[task.type];
+    const priCfg = priorityMap[task.priority];
     const Icon = cfg.icon;
-    const showPathPopup = pathPopupTaskId === t.id;
-    const vehicleCount = t.vehicleIds?.length || t.vehicleCount || 0;
+    const showPathPopup = pathPopupTaskId === task.id;
+    const vehicleCount = getTaskVehicleIds(task).length;
+    const validation = validateTask(task);
+    const isActionDisabled = task.status !== 'completed' && !validation.valid;
+    const sourceSummary = getSourceStationsSummary(task);
 
     return (
       <div key={task.id} className="bg-white rounded-xl p-4 shadow-sm border border-slate-100 hover:shadow-md transition-shadow relative">
+        {!validation.valid && task.status !== 'completed' && (
+          <div className="mb-3 p-2.5 bg-red-50 border border-red-200 rounded-lg">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-red-700">任务信息不完整，无法执行</p>
+                <ul className="mt-1 text-xs text-red-600 space-y-0.5">
+                  {validation.errors.map((err, i) => (
+                    <li key={i}>• {err}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <button
+              onClick={() => openEditor(task)}
+              className="mt-2 w-full flex items-center justify-center gap-1.5 py-1.5 bg-red-600 text-white text-xs rounded-lg hover:bg-red-700 transition-colors font-medium"
+            >
+              <Edit3 className="w-3.5 h-3.5" /> 编辑补全信息
+            </button>
+          </div>
+        )}
+
         <div className="flex items-start justify-between mb-3">
           <div className="flex items-center gap-2">
             <div className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', cfg.bg)}>
@@ -379,15 +555,29 @@ export default function Dispatch() {
               <p className="text-xs text-slate-500">{task.createdAt}</p>
             </div>
           </div>
-          <span className={clsx('px-2 py-0.5 rounded-full text-xs font-medium', priCfg.class)}>
-            优先级 {priCfg.label}
-          </span>
+          <div className="flex items-center gap-1.5">
+            {task.status !== 'completed' && (
+              <button
+                onClick={() => openEditor(task)}
+                className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                title="编辑任务"
+              >
+                <Edit3 className="w-4 h-4" />
+              </button>
+            )}
+            <span className={clsx('px-2 py-0.5 rounded-full text-xs font-medium', priCfg.class)}>
+              优先级 {priCfg.label}
+            </span>
+          </div>
         </div>
 
         {(task.type === 'overflow' || task.type === 'shortage') && (
           <div className="mb-2">
             <p className="text-xs text-slate-500 mb-1">调出车辆:</p>
             {renderVehicleChips(task)}
+            {task.type === 'shortage' && !task.fromStationId && sourceSummary !== '-' && (
+              <p className="text-xs text-slate-400 mb-1">来源：{sourceSummary}</p>
+            )}
           </div>
         )}
 
@@ -490,17 +680,37 @@ export default function Dispatch() {
           {task.status === 'pending' && (
             <button
               onClick={() => handleStart(task.id)}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors font-medium"
+              disabled={isActionDisabled}
+              className={clsx(
+                'flex-1 flex items-center justify-center gap-1.5 py-2 text-sm rounded-lg transition-colors font-medium',
+                isActionDisabled
+                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  : 'bg-blue-600 text-white hover:bg-blue-700'
+              )}
             >
-              <PlayCircle className="w-4 h-4" /> 开始执行
+              {isActionDisabled ? (
+                <><Ban className="w-4 h-4" /> 信息不完整</>
+              ) : (
+                <><PlayCircle className="w-4 h-4" /> 开始执行</>
+              )}
             </button>
           )}
           {task.status === 'in_progress' && (
             <button
               onClick={() => handleExecute(task.id)}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 transition-colors font-medium"
+              disabled={isActionDisabled}
+              className={clsx(
+                'flex-1 flex items-center justify-center gap-1.5 py-2 text-sm rounded-lg transition-colors font-medium',
+                isActionDisabled
+                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  : 'bg-emerald-600 text-white hover:bg-emerald-700'
+              )}
             >
-              <CheckCircle className="w-4 h-4" /> 完成
+              {isActionDisabled ? (
+                <><Ban className="w-4 h-4" /> 请先补全</>
+              ) : (
+                <><CheckCircle className="w-4 h-4" /> 完成</>
+              )}
             </button>
           )}
           {task.status === 'completed' && (
@@ -513,7 +723,11 @@ export default function Dispatch() {
     );
   };
 
-  const renderVehicleCheckboxList = (vehicleList: Vehicle[]) => {
+  const renderVehicleCheckboxList = (
+    vehicleList: Vehicle[],
+    target: 'form' | 'edit' = 'form'
+  ) => {
+    const currentIds = target === 'form' ? form.vehicleIds : editForm.vehicleIds;
     if (vehicleList.length === 0) {
       return (
         <div className="text-center py-4 text-slate-400 text-sm border border-dashed border-slate-200 rounded-lg">
@@ -522,15 +736,16 @@ export default function Dispatch() {
       );
     }
 
-    const allSelected = vehicleList.every(v => form.vehicleIds.includes(v.id));
-    const someSelected = vehicleList.some(v => form.vehicleIds.includes(v.id)) && !allSelected;
+    const allSelected = vehicleList.every(v => currentIds.includes(v.id));
+    const someSelected = vehicleList.some(v => currentIds.includes(v.id)) && !allSelected;
+    const toggleFn = target === 'form' ? toggleVehicleId : toggleEditVehicleId;
 
     return (
       <div className="space-y-2">
         <div className="flex items-center justify-between px-1">
           <button
             type="button"
-            onClick={() => toggleSelectAllVehicles(vehicleList)}
+            onClick={() => toggleSelectAllVehicles(vehicleList, target)}
             className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-800 transition-colors"
           >
             {allSelected ? (
@@ -545,12 +760,12 @@ export default function Dispatch() {
             <span className="font-medium">全选</span>
           </button>
           <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
-            已选 {form.vehicleIds.length} 辆
+            已选 {currentIds.length} 辆
           </span>
         </div>
         <div className="max-h-48 overflow-y-auto space-y-1 border border-slate-200 rounded-lg p-2">
           {vehicleList.map((v) => {
-            const isSelected = form.vehicleIds.includes(v.id);
+            const isSelected = currentIds.includes(v.id);
             return (
               <label
                 key={v.id}
@@ -562,7 +777,7 @@ export default function Dispatch() {
                 <input
                   type="checkbox"
                   checked={isSelected}
-                  onChange={() => toggleVehicleId(v.id)}
+                  onChange={() => toggleFn(v.id)}
                   className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
                 />
                 <div className="flex-1">
@@ -583,8 +798,8 @@ export default function Dispatch() {
     );
   };
 
-  const renderSelectedVehicleDetails = () => {
-    const vehicle = getVehicle(form.vehicleId);
+  const renderSelectedVehicleDetails = (vehicleId: string) => {
+    const vehicle = getVehicle(vehicleId);
     if (!vehicle) return null;
 
     return (
@@ -627,6 +842,9 @@ export default function Dispatch() {
     { key: 'completed', label: '已完成', icon: CheckCircle, count: groupedTasks.completed.length, color: 'text-emerald-600', bg: 'bg-emerald-100' },
   ] as const;
 
+  const currentForm = editingTask ? editForm : form;
+  const updateCurrentForm = editingTask ? updateEditForm : updateForm;
+
   const renderPlannerModal = () => (
     <div className="fixed inset-0 z-40 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40" onClick={closePlanner} />
@@ -636,7 +854,9 @@ export default function Dispatch() {
             <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center">
               <Settings className="w-5 h-5 text-blue-600" />
             </div>
-            <h3 className="text-lg font-bold text-slate-800">配置调度方案</h3>
+            <h3 className="text-lg font-bold text-slate-800">
+              {editingTask ? '编辑调度任务' : '配置调度方案'}
+            </h3>
           </div>
           <button
             onClick={closePlanner}
@@ -654,10 +874,10 @@ export default function Dispatch() {
               return (
                 <button
                   key={type}
-                  onClick={() => updateForm('type', type)}
+                  onClick={() => updateCurrentForm('type', type)}
                   className={clsx(
                     'flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition-all',
-                    form.type === type
+                    currentForm.type === type
                       ? 'bg-white text-slate-800 shadow-sm'
                       : 'text-slate-500 hover:text-slate-700'
                   )}
@@ -669,7 +889,7 @@ export default function Dispatch() {
             })}
           </div>
 
-          {form.type === 'shortage' && (
+          {currentForm.type === 'shortage' && (
             <>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">
@@ -678,10 +898,10 @@ export default function Dispatch() {
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => updateForm('source', 'station')}
+                    onClick={() => updateCurrentForm('source', 'station')}
                     className={clsx(
                       'py-2.5 px-3 rounded-lg text-sm font-medium border-2 transition-all text-left',
-                      form.source === 'station'
+                      currentForm.source === 'station'
                         ? 'border-blue-500 bg-blue-50 text-blue-700'
                         : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
                     )}
@@ -693,10 +913,10 @@ export default function Dispatch() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => updateForm('source', 'specific')}
+                    onClick={() => updateCurrentForm('source', 'specific')}
                     className={clsx(
                       'py-2.5 px-3 rounded-lg text-sm font-medium border-2 transition-all text-left',
-                      form.source === 'specific'
+                      currentForm.source === 'specific'
                         ? 'border-blue-500 bg-blue-50 text-blue-700'
                         : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
                     )}
@@ -712,25 +932,28 @@ export default function Dispatch() {
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">目标站点 <span className="text-red-500">*</span></label>
                 <select
-                  value={form.toStationId}
-                  onChange={(e) => updateForm('toStationId', e.target.value)}
+                  value={currentForm.toStationId}
+                  onChange={(e) => updateCurrentForm('toStationId', e.target.value)}
                   className="w-full px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
                 >
                   <option value="">请选择站点</option>
-                  {stations.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}（当前 {s.currentCount}/{s.capacity}）
-                    </option>
-                  ))}
+                  {stations.map((s) => {
+                    const remaining = s.capacity - s.currentCount;
+                    return (
+                      <option key={s.id} value={s.id}>
+                        {s.name}（当前 {s.currentCount}/{s.capacity}，剩余 {remaining}）
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
-              {form.source === 'station' && (
+              {currentForm.source === 'station' && (
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5">调出站点 <span className="text-red-500">*</span></label>
                   <select
-                    value={form.fromStationId}
-                    onChange={(e) => updateForm('fromStationId', e.target.value)}
+                    value={currentForm.fromStationId}
+                    onChange={(e) => updateCurrentForm('fromStationId', e.target.value)}
                     className="w-full px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
                   >
                     <option value="">请选择满车站点（占用率大于 70%）</option>
@@ -740,40 +963,64 @@ export default function Dispatch() {
                       </option>
                     ))}
                   </select>
-                  {form.fromStationId && (
+                  {currentForm.fromStationId && (
                     <div className="mt-3">
                       <label className="block text-sm font-medium text-slate-700 mb-1.5">选择车辆 <span className="text-red-500">*</span></label>
-                      {renderVehicleCheckboxList(getAvailableVehiclesAtStation(form.fromStationId))}
+                      {renderVehicleCheckboxList(getAvailableVehiclesAtStation(currentForm.fromStationId), editingTask ? 'edit' : 'form')}
                     </div>
                   )}
                 </div>
               )}
 
-              {form.source === 'specific' && (
+              {currentForm.source === 'specific' && (
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">选择车辆 <span className="text-red-500">*</span></label>
-                  {renderVehicleCheckboxList(getOnlineVehicles())}
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                    选择车辆 <span className="text-red-500">*</span>
+                    <span className="ml-2 text-xs text-slate-400 font-normal">（可跨站点多选）</span>
+                  </label>
+                  {renderVehicleCheckboxList(getOnlineVehicles(), editingTask ? 'edit' : 'form')}
                 </div>
               )}
 
-              {form.vehicleIds.length > 0 && (
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-blue-800">已选车辆数</span>
-                    <span className="text-lg font-bold text-blue-600">{form.vehicleIds.length} 辆</span>
+              {currentForm.vehicleIds.length > 0 && currentForm.toStationId && (() => {
+                const toStation = stations.find(s => s.id === currentForm.toStationId);
+                if (!toStation) return null;
+                const remaining = toStation.capacity - toStation.currentCount;
+                const isOversized = currentForm.vehicleIds.length > remaining;
+                return (
+                  <div className={clsx(
+                    'border rounded-lg p-3',
+                    isOversized ? 'bg-amber-50 border-amber-200' : 'bg-blue-50 border-blue-200'
+                  )}>
+                    <div className="flex items-center justify-between">
+                      <span className={clsx('text-sm', isOversized ? 'text-amber-800' : 'text-blue-800')}>
+                        已选车辆数 / 剩余车位
+                      </span>
+                      <span className={clsx(
+                        'text-lg font-bold',
+                        isOversized ? 'text-amber-600' : 'text-blue-600'
+                      )}>
+                        {currentForm.vehicleIds.length} / {remaining}
+                      </span>
+                    </div>
+                    {isOversized && (
+                      <p className="mt-1 text-xs text-amber-700">
+                        ⚠️ 超出目标站容量，执行时将只调入 {remaining} 辆，其余车辆保留在原站点
+                      </p>
+                    )}
                   </div>
-                </div>
-              )}
+                );
+              })()}
             </>
           )}
 
-          {form.type === 'overflow' && (
+          {currentForm.type === 'overflow' && (
             <>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">调出站点 <span className="text-red-500">*</span></label>
                 <select
-                  value={form.fromStationId}
-                  onChange={(e) => updateForm('fromStationId', e.target.value)}
+                  value={currentForm.fromStationId}
+                  onChange={(e) => updateCurrentForm('fromStationId', e.target.value)}
                   className="w-full px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
                 >
                   <option value="">请选择调出站点</option>
@@ -787,42 +1034,64 @@ export default function Dispatch() {
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">调入站点 <span className="text-red-500">*</span></label>
                 <select
-                  value={form.toStationId}
-                  onChange={(e) => updateForm('toStationId', e.target.value)}
+                  value={currentForm.toStationId}
+                  onChange={(e) => updateCurrentForm('toStationId', e.target.value)}
                   className="w-full px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
                 >
                   <option value="">请选择调入站点</option>
-                  {stations.filter(s => s.id !== form.fromStationId).map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}（当前 {s.currentCount}/{s.capacity}）
-                    </option>
-                  ))}
+                  {stations.filter(s => s.id !== currentForm.fromStationId).map((s) => {
+                    const remaining = s.capacity - s.currentCount;
+                    return (
+                      <option key={s.id} value={s.id}>
+                        {s.name}（当前 {s.currentCount}/{s.capacity}，剩余 {remaining}）
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
-              {form.fromStationId && (
+              {currentForm.fromStationId && (
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5">选择车辆 <span className="text-red-500">*</span></label>
-                  {renderVehicleCheckboxList(getAvailableVehiclesAtStation(form.fromStationId))}
+                  {renderVehicleCheckboxList(getAvailableVehiclesAtStation(currentForm.fromStationId), editingTask ? 'edit' : 'form')}
                 </div>
               )}
-              {form.vehicleIds.length > 0 && (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-amber-800">转运车辆数（自动计算）</span>
-                    <span className="text-lg font-bold text-amber-600">{form.vehicleIds.length} 辆</span>
+              {currentForm.vehicleIds.length > 0 && currentForm.toStationId && (() => {
+                const toStation = stations.find(s => s.id === currentForm.toStationId);
+                if (!toStation) return null;
+                const remaining = toStation.capacity - toStation.currentCount;
+                const isOversized = currentForm.vehicleIds.length > remaining;
+                return (
+                  <div className={clsx(
+                    'border rounded-lg p-3',
+                    isOversized ? 'bg-amber-50 border-amber-200' : 'bg-amber-50 border-amber-200'
+                  )}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-amber-800">转运车辆数 / 剩余车位</span>
+                      <span className={clsx(
+                        'text-lg font-bold',
+                        isOversized ? 'text-amber-600' : 'text-amber-600'
+                      )}>
+                        {currentForm.vehicleIds.length} / {remaining}
+                      </span>
+                    </div>
+                    {isOversized && (
+                      <p className="mt-1 text-xs text-amber-700">
+                        ⚠️ 超出调入站容量，执行时将只调入 {remaining} 辆，其余车辆保留在原站点
+                      </p>
+                    )}
                   </div>
-                </div>
-              )}
+                );
+              })()}
             </>
           )}
 
-          {form.type === 'low_battery' && (
+          {currentForm.type === 'low_battery' && (
             <>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">选择车辆 <span className="text-red-500">*</span></label>
                 <select
-                  value={form.vehicleId}
-                  onChange={(e) => updateForm('vehicleId', e.target.value)}
+                  value={currentForm.vehicleId}
+                  onChange={(e) => updateCurrentForm('vehicleId', e.target.value)}
                   className="w-full px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
                 >
                   <option value="">请选择需要换电的车辆</option>
@@ -833,12 +1102,12 @@ export default function Dispatch() {
                   ))}
                 </select>
               </div>
-              {form.vehicleId && renderSelectedVehicleDetails()}
+              {currentForm.vehicleId && renderSelectedVehicleDetails(currentForm.vehicleId)}
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">备注</label>
                 <textarea
-                  value={form.note}
-                  onChange={(e) => updateForm('note', e.target.value)}
+                  value={currentForm.note}
+                  onChange={(e) => updateCurrentForm('note', e.target.value)}
                   placeholder="可选：填写换电相关备注信息"
                   rows={3}
                   className="w-full px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm resize-none"
@@ -852,11 +1121,11 @@ export default function Dispatch() {
             <div className="grid grid-cols-3 gap-2">
               {(['high', 'medium', 'low'] as const).map((p) => {
                 const pCfg = priorityMap[p];
-                const isActive = form.priority === p;
+                const isActive = currentForm.priority === p;
                 return (
                   <button
                     key={p}
-                    onClick={() => updateForm('priority', p)}
+                    onClick={() => updateCurrentForm('priority', p)}
                     className={clsx(
                       'py-2 rounded-lg text-sm font-medium border-2 transition-all',
                       isActive
@@ -883,7 +1152,7 @@ export default function Dispatch() {
             onClick={handleGenerateTask}
             className="flex-1 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-md shadow-blue-600/30"
           >
-            生成任务
+            {editingTask ? '保存修改' : '生成任务'}
           </button>
         </div>
       </div>

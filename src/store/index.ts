@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Vehicle, Station, DispatchTask, InspectionOrder, Complaint, PricingRule } from '@/types';
+import type { Vehicle, Station, DispatchTask, InspectionOrder, Complaint, PricingRule, DispatchExecutionResult } from '@/types';
 import { mockVehicles, mockStations, mockDispatchTasks, mockInspectionOrders, mockComplaints, mockPricingRules } from '@/data/mockData';
 
 interface AppState {
@@ -19,7 +19,7 @@ interface AppState {
   deleteStation: (id: string) => void;
   addDispatchTask: (task: Omit<DispatchTask, 'id'>) => string;
   updateDispatchTask: (id: string, updates: Partial<DispatchTask>) => void;
-  executeDispatchTask: (id: string) => void;
+  executeDispatchTask: (id: string) => DispatchExecutionResult;
   addInspectionOrder: (order: Omit<InspectionOrder, 'id'>) => string;
   updateInspectionOrder: (id: string, updates: Partial<InspectionOrder>) => void;
   updateComplaint: (id: string, updates: Partial<Complaint>) => void;
@@ -75,59 +75,99 @@ export const useAppStore = create<AppState>((set) => ({
     dispatchTasks: state.dispatchTasks.map((t) => (t.id === id ? { ...t, ...updates } : t)),
   })),
 
-  executeDispatchTask: (id) => set((state) => {
-    const task = state.dispatchTasks.find((t) => t.id === id);
-    if (!task) return state;
-    const taskWithVehicleIds = task as DispatchTask & { vehicleIds?: string[] };
-    let newStations = state.stations;
-    let newVehicles = state.vehicles;
-    const selectedCount = taskWithVehicleIds.vehicleIds?.length || task.vehicleCount || 0;
-    
-    if (task.type === 'overflow' && task.fromStationId && task.toStationId) {
-      const fromStation = state.stations.find(s => s.id === task.fromStationId);
-      const actualCount = Math.min(selectedCount, fromStation?.currentCount || 0);
-      if (actualCount <= 0) return state;
-      
-      newStations = state.stations.map((s) => {
-        if (s.id === task.fromStationId) return { ...s, currentCount: s.currentCount - actualCount };
-        if (s.id === task.toStationId) return { ...s, currentCount: Math.min(s.capacity, s.currentCount + actualCount) };
-        return s;
-      });
-      
-      if (taskWithVehicleIds.vehicleIds && taskWithVehicleIds.vehicleIds.length > 0) {
-        newVehicles = state.vehicles.map(v => 
-          taskWithVehicleIds.vehicleIds!.includes(v.id) ? { ...v, stationId: task.toStationId } : v
-        );
-      }
-    } else if (task.type === 'shortage' && task.toStationId) {
-      if (!task.fromStationId) {
+  executeDispatchTask: (id) => {
+    let result: DispatchExecutionResult = { success: false, movedCount: 0, skippedCount: 0 };
+    set((state) => {
+      const task = state.dispatchTasks.find((t) => t.id === id);
+      if (!task) {
+        result = { success: false, movedCount: 0, skippedCount: 0, reason: '任务不存在' };
         return state;
       }
-      const fromStation = state.stations.find(s => s.id === task.fromStationId);
-      const actualCount = Math.min(selectedCount, fromStation?.currentCount || 0);
-      if (actualCount <= 0) return state;
-      
-      newStations = state.stations.map((s) => {
-        if (s.id === task.fromStationId) return { ...s, currentCount: s.currentCount - actualCount };
-        if (s.id === task.toStationId) return { ...s, currentCount: Math.min(s.capacity, s.currentCount + actualCount) };
+
+      if (task.type === 'low_battery') {
+        result = { success: true, movedCount: task.vehicleId ? 1 : 0, skippedCount: 0 };
+        return {
+          dispatchTasks: state.dispatchTasks.map((t) =>
+            t.id === id ? { ...t, status: 'completed' as const } : t
+          ),
+        };
+      }
+
+      if (!task.toStationId) {
+        result = { success: false, movedCount: 0, skippedCount: 0, reason: '缺少调入站点' };
+        return state;
+      }
+
+      const vehicleIdsToMove = task.vehicleIds && task.vehicleIds.length > 0
+        ? task.vehicleIds
+        : (task.vehicleId ? [task.vehicleId] : []);
+
+      if (vehicleIdsToMove.length === 0) {
+        result = { success: false, movedCount: 0, skippedCount: 0, reason: '没有可调度的车辆' };
+        return state;
+      }
+
+      const toStation = state.stations.find(s => s.id === task.toStationId);
+      if (!toStation) {
+        result = { success: false, movedCount: 0, skippedCount: 0, reason: '调入站点不存在' };
+        return state;
+      }
+      const remainingSlots = toStation.capacity - toStation.currentCount;
+      if (remainingSlots <= 0) {
+        result = { success: false, movedCount: 0, skippedCount: vehicleIdsToMove.length, reason: '调入站点已饱和，无剩余车位' };
+        return state;
+      }
+
+      const validVehicles = state.vehicles.filter(v =>
+        vehicleIdsToMove.includes(v.id) && v.status !== 'maintenance' && v.stationId !== task.toStationId
+      );
+      const vehiclesToActuallyMove = validVehicles.slice(0, remainingSlots);
+      const skipped = validVehicles.length - vehiclesToActuallyMove.length + (vehicleIdsToMove.length - validVehicles.length);
+
+      if (vehiclesToActuallyMove.length === 0) {
+        result = { success: false, movedCount: 0, skippedCount: skipped, reason: '没有可转移的有效车辆' };
+        return state;
+      }
+
+      const sourceStationDeductions = new Map<string, number>();
+      vehiclesToActuallyMove.forEach(v => {
+        if (v.stationId) {
+          sourceStationDeductions.set(v.stationId, (sourceStationDeductions.get(v.stationId) || 0) + 1);
+        }
+      });
+
+      const movedIds = new Set(vehiclesToActuallyMove.map(v => v.id));
+      const newVehicles = state.vehicles.map(v =>
+        movedIds.has(v.id) ? { ...v, stationId: task.toStationId } : v
+      );
+
+      const newStations = state.stations.map(s => {
+        if (s.id === task.toStationId) {
+          return { ...s, currentCount: s.currentCount + vehiclesToActuallyMove.length };
+        }
+        const deduction = sourceStationDeductions.get(s.id);
+        if (deduction) {
+          return { ...s, currentCount: Math.max(0, s.currentCount - deduction) };
+        }
         return s;
       });
-      
-      if (taskWithVehicleIds.vehicleIds && taskWithVehicleIds.vehicleIds.length > 0) {
-        newVehicles = state.vehicles.map(v => 
-          taskWithVehicleIds.vehicleIds!.includes(v.id) ? { ...v, stationId: task.toStationId } : v
-        );
-      }
-    }
-    
-    return {
-      stations: newStations,
-      vehicles: newVehicles,
-      dispatchTasks: state.dispatchTasks.map((t) =>
-        t.id === id ? { ...t, status: 'completed' as const } : t
-      ),
-    };
-  }),
+
+      result = {
+        success: true,
+        movedCount: vehiclesToActuallyMove.length,
+        skippedCount: skipped,
+      };
+
+      return {
+        stations: newStations,
+        vehicles: newVehicles,
+        dispatchTasks: state.dispatchTasks.map((t) =>
+          t.id === id ? { ...t, status: 'completed' as const, vehicleCount: vehiclesToActuallyMove.length } : t
+        ),
+      };
+    });
+    return result;
+  },
 
   addInspectionOrder: (order) => {
     const id = `i${Date.now()}`;
