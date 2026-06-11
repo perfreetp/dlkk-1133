@@ -78,21 +78,51 @@ export const useAppStore = create<AppState>((set) => ({
   executeDispatchTask: (id) => set((state) => {
     const task = state.dispatchTasks.find((t) => t.id === id);
     if (!task) return state;
+    const taskWithVehicleIds = task as DispatchTask & { vehicleIds?: string[] };
     let newStations = state.stations;
-    const count = task.vehicleCount || 0;
-    if (task.type === 'overflow' && task.fromStationId && task.toStationId && count > 0) {
+    let newVehicles = state.vehicles;
+    const selectedCount = taskWithVehicleIds.vehicleIds?.length || task.vehicleCount || 0;
+    
+    if (task.type === 'overflow' && task.fromStationId && task.toStationId) {
+      const fromStation = state.stations.find(s => s.id === task.fromStationId);
+      const actualCount = Math.min(selectedCount, fromStation?.currentCount || 0);
+      if (actualCount <= 0) return state;
+      
       newStations = state.stations.map((s) => {
-        if (s.id === task.fromStationId) return { ...s, currentCount: Math.max(0, s.currentCount - count) };
-        if (s.id === task.toStationId) return { ...s, currentCount: Math.min(s.capacity, s.currentCount + count) };
+        if (s.id === task.fromStationId) return { ...s, currentCount: s.currentCount - actualCount };
+        if (s.id === task.toStationId) return { ...s, currentCount: Math.min(s.capacity, s.currentCount + actualCount) };
         return s;
       });
-    } else if (task.type === 'shortage' && task.toStationId && count > 0) {
-      newStations = state.stations.map((s) =>
-        s.id === task.toStationId ? { ...s, currentCount: Math.min(s.capacity, s.currentCount + count) } : s
-      );
+      
+      if (taskWithVehicleIds.vehicleIds && taskWithVehicleIds.vehicleIds.length > 0) {
+        newVehicles = state.vehicles.map(v => 
+          taskWithVehicleIds.vehicleIds!.includes(v.id) ? { ...v, stationId: task.toStationId } : v
+        );
+      }
+    } else if (task.type === 'shortage' && task.toStationId) {
+      if (!task.fromStationId) {
+        return state;
+      }
+      const fromStation = state.stations.find(s => s.id === task.fromStationId);
+      const actualCount = Math.min(selectedCount, fromStation?.currentCount || 0);
+      if (actualCount <= 0) return state;
+      
+      newStations = state.stations.map((s) => {
+        if (s.id === task.fromStationId) return { ...s, currentCount: s.currentCount - actualCount };
+        if (s.id === task.toStationId) return { ...s, currentCount: Math.min(s.capacity, s.currentCount + actualCount) };
+        return s;
+      });
+      
+      if (taskWithVehicleIds.vehicleIds && taskWithVehicleIds.vehicleIds.length > 0) {
+        newVehicles = state.vehicles.map(v => 
+          taskWithVehicleIds.vehicleIds!.includes(v.id) ? { ...v, stationId: task.toStationId } : v
+        );
+      }
     }
+    
     return {
       stations: newStations,
+      vehicles: newVehicles,
       dispatchTasks: state.dispatchTasks.map((t) =>
         t.id === id ? { ...t, status: 'completed' as const } : t
       ),
